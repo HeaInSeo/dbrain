@@ -107,6 +107,18 @@ The exact Markdown marker syntax remains an implementation serialization detail 
 
 A Claim reference binds to the exact Claim identity, not merely to similar text or a document path.
 
+Reference resolution also carries an explicit **use intent**. The minimum semantic distinction is:
+
+```text
+CURRENT_USE
+= the consumer expects the referenced Claim to remain acceptable for present/current use
+
+HISTORICAL_EXACT
+= the consumer intentionally refers to that exact historical Claim identity
+```
+
+The Claim ID itself does not encode this intent. Intent belongs to the reference edge or the resolution request/consumer contract.
+
 Consumers may include:
 
 - canonical documents;
@@ -121,10 +133,16 @@ A Claim reference MUST NOT be silently rebound to a replacement Claim after supe
 If Claim B supersedes Claim A:
 
 ```text
-old exact reference → Claim A remains historically resolvable
-current-use validation → marks the reference stale/review-required where policy requires
-human/authority review → explicitly rebinds to Claim B if semantically correct
+HISTORICAL_EXACT reference to A
+→ remains valid as an exact historical binding to A
+
+CURRENT_USE reference to A
+→ becomes stale/review-required
+→ does not silently bind to B
+→ human/authority review explicitly rebinds to B only if semantically correct
 ```
+
+A consumer-specific policy may impose stricter handling, but it MUST NOT weaken the no-silent-rebind rule.
 
 This prevents supersession from silently changing the meaning of accepted downstream artifacts.
 
@@ -199,11 +217,24 @@ Split/merge MUST NOT automatically rewrite inbound semantic references. Consumer
 A Claim's effective currentness depends on both:
 
 - its own supersession/invalidation state;
-- the lifecycle/authority state of its containing source.
+- the lifecycle/authority eligibility of its containing source.
 
-A current Claim inside a superseded or invalid containing source MUST NOT surface as current authoritative knowledge unless another declared authority rule explicitly preserves it.
+The Claim subsystem does **not** own or freeze the document lifecycle vocabulary.
 
-PKG-M0 lifecycle vocabulary is handled by the lifecycle contract; this Claim contract only defines the Claim-specific interaction.
+Instead, current authoritative Claim resolution consumes an upstream source-eligibility determination from the applicable lifecycle/authority resolver:
+
+```text
+source eligible for current authoritative use
+→ Claim may continue through Claim-specific resolution
+
+source ineligible for current authoritative use
+→ Claim MUST NOT surface as current authoritative knowledge
+
+source eligibility cannot be established
+→ UNRESOLVED
+```
+
+This keeps lifecycle semantics in their own contract while preserving the Claim invariant that a Claim cannot outlive the current-authority eligibility of its containing source merely because its own metadata still appears current.
 
 ## 10. Content digest and provenance
 
@@ -243,7 +274,32 @@ They may have their own candidate/local identifiers.
 
 Promotion into canonical knowledge is an authority/acceptance act that creates or binds the canonical Claim only after the semantic source becomes accepted.
 
-## 12. Failure semantics
+## 12. Validation scope and failure semantics
+
+Claim validation operates against an explicit **Validation Scope** rather than pretending that every validator invocation sees the complete Development Workspace.
+
+A Validation Scope identifies:
+
+- the document/repository/workspace material actually observed;
+- the subject/scope boundary relevant to the validation request;
+- whether the observed set is declared **complete** for the particular invariant being checked.
+
+Rules:
+
+```text
+duplicate Claim ID observed inside the supplied scope
+→ INVALID
+
+a required target/reference is absent from a scope declared complete for that check
+→ INVALID
+
+a required target/reference is absent but the supplied scope is incomplete or completeness is unknown
+→ UNRESOLVED
+
+no validator may claim workspace-global uniqueness from an incomplete workspace observation
+```
+
+This applies particularly to cross-repository Claim uniqueness and supersession-target validation. The exact transport/schema of Validation Scope belongs to implementation/Observed Workspace Composite work; the semantic requirement for explicit scope + completeness is frozen here.
 
 The resolver returns `UNRESOLVED` rather than guessing when:
 
@@ -252,7 +308,9 @@ The resolver returns `UNRESOLVED` rather than guessing when:
 - the Claim anchor is missing or ambiguous;
 - the containing source's required authority cannot be established;
 - the requested current Claim is superseded and no accepted replacement binding exists for the consumer;
-- source revision/provenance required by policy cannot be established.
+- source revision/provenance required by policy cannot be established;
+- the supplied validation/observation scope is insufficient to establish a required cross-repository invariant;
+- containing-source current-authority eligibility cannot be established.
 
 ## 13. Minimum schema candidate
 
@@ -297,18 +355,24 @@ The eventual validator must cover at least:
 1. document with zero Claims is valid;
 2. duplicate Claim ID fails;
 3. missing Claim anchor fails;
-4. one declared Claim resolving to multiple anchors fails;
-5. path move does not change Claim identity;
-6. meaning-preserving edit keeps ID but changes digest;
-7. semantic supersession creates a new Claim identity;
-8. superseded Claim is excluded from default current retrieval;
-9. exact inbound reference is not silently rebound;
-10. Claim in non-authoritative source cannot become project authority;
-11. unresolved authority for a required Claim fails closed;
-12. split/merge preserve old Claims for history without automatic inbound rewrite.
+4. one declared Claim resolving to multiple anchors fails once the applicable serialization/parser layer is available;
+5. duplicate locator declarations within one document fail even before concrete Markdown parsing is frozen;
+6. incomplete Validation Scope cannot assert workspace-global uniqueness or missing-target invalidity;
+7. a missing required target in a scope declared complete for that check fails;
+8. path move does not change Claim identity;
+9. meaning-preserving edit keeps ID but changes digest;
+10. semantic supersession creates a new Claim identity;
+11. CURRENT_USE reference to a superseded Claim becomes stale/review-required without silent rebinding;
+12. HISTORICAL_EXACT reference remains bound to the exact historical Claim;
+13. superseded Claim is excluded from default current retrieval;
+14. Claim in non-authoritative source cannot become project authority;
+15. unresolved authority or source eligibility for a required Claim fails closed;
+16. split/merge preserve old Claims for history without automatic inbound rewrite.
 
 ## 16. Open serialization detail
 
 PKG-M0 still needs to freeze the concrete Markdown anchor/metadata serialization.
 
 That serialization decision must satisfy this contract and must not change the semantic rules above.
+
+Until then, PKG-M0 core validation may validate **declared locator uniqueness/shape** without claiming that it has parsed or proven the concrete Markdown anchor relation. Full anchor-to-prose validation belongs to the serialization/parser layer once frozen.
