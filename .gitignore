@@ -10,6 +10,12 @@ vendor/
 coverage.out
 coverage.html
 
+# DBrain derived/local state
+.dbrain/
+*.db
+*.db-shm
+*.db-wal
+
 # Editor / OS
 .idea/
 .vscode/
