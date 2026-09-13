@@ -1,0 +1,14 @@
+# WORKING EXAMPLE — NOT FROZEN
+version: 1
+subjects:
+  - subject: development.authority
+    scope: workspace
+    owner: workspace-authority
+    entrypoint: docs/
+    guards: []
+
+  - subject: repo.dbrain.local
+    scope: repo:dbrain
+    owner: repo-maintainers
+    entrypoint: README.md
+    guards: []
