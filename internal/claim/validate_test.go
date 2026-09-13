@@ -12,6 +12,7 @@ func completeScope(observed ...Claim) ValidationScope {
 		Complete: map[Check]Completeness{
 			CheckClaimIDUniqueness:           CompletenessComplete,
 			CheckSupersessionTargetExistence: CompletenessComplete,
+			CheckSupersessionCurrentness:     CompletenessComplete,
 		},
 	}
 }
@@ -285,14 +286,105 @@ func TestSupersededClaimIsPreserved(t *testing.T) {
 		t.Fatalf("status = %q, want %q", got.Status, StatusValid)
 	}
 
-	r := NewResolver(scope, eligibleEverywhere)
-	if _, ok := r.Lookup("claim:a"); !ok {
-		t.Error("superseded Claim must remain observable")
+	r, _ := Admit(scope, eligibleEverywhere)
+	if _, err := r.Lookup("claim:a"); err != nil {
+		t.Errorf("superseded Claim must remain observable: %v", err)
 	}
-	if got := r.SupersededBy("claim:a"); len(got) != 1 || got[0] != "claim:b" {
+	got, err := r.SupersededBy("claim:a")
+	if err != nil {
+		t.Fatalf("SupersededBy(claim:a) error = %v", err)
+	}
+	if len(got) != 1 || got[0] != "claim:b" {
 		t.Errorf("SupersededBy(claim:a) = %v, want [claim:b]", got)
 	}
-	if got := r.SupersededBy("claim:b"); len(got) != 0 {
-		t.Errorf("SupersededBy(claim:b) = %v, want empty", got)
+	if got, err := r.SupersededBy("claim:b"); err != nil || len(got) != 0 {
+		t.Errorf("SupersededBy(claim:b) = %v, %v, want empty and no error", got, err)
+	}
+}
+
+// C7: a check the operation depends on cannot be waved through when the scope
+// never declared it complete.
+func TestRequiredCheckWithoutCompletenessIsUnresolved(t *testing.T) {
+	scope := ValidationScope{
+		Observed: []Claim{doc("claim:a", "doc-1", "#one")},
+		Required: map[Check]bool{CheckClaimIDUniqueness: true},
+	}
+
+	got := Validate(scope)
+	if got.Status != StatusUnresolved {
+		t.Fatalf("status = %q, want %q (issues: %+v)", got.Status, StatusUnresolved, got.Issues)
+	}
+	if !got.HasCode(IssueRequiredCheckIncomplete) {
+		t.Errorf("missing %q issue: %+v", IssueRequiredCheckIncomplete, got.Issues)
+	}
+	if got.IsProven(CheckClaimIDUniqueness) {
+		t.Error("an incomplete scope must not prove uniqueness")
+	}
+
+	incomplete := scope
+	incomplete.Complete = map[Check]Completeness{CheckClaimIDUniqueness: CompletenessIncomplete}
+	if got := Validate(incomplete); got.Status != StatusUnresolved {
+		t.Errorf("incomplete status = %q, want %q", got.Status, StatusUnresolved)
+	}
+}
+
+// C8: a check nobody required does not fail the request, but it proves nothing
+// either. Structural validation of a document requires no global check, so the
+// zero-Claim and zero-requirement cases stay VALID.
+func TestUnrequiredCheckLeavesProofFalseWithoutFailing(t *testing.T) {
+	scope := ValidationScope{Observed: []Claim{doc("claim:a", "doc-1", "#one")}}
+
+	got := Validate(scope)
+	if got.Status != StatusValid {
+		t.Fatalf("status = %q, want %q (issues: %+v)", got.Status, StatusValid, got.Issues)
+	}
+	if got.GlobalUniquenessEstablished {
+		t.Error("GlobalUniquenessEstablished must be false without declared completeness")
+	}
+	if got.IsProven(CheckSupersessionCurrentness) {
+		t.Error("currentness must not be proven without declared completeness")
+	}
+}
+
+// A required check whose completeness is declared complete establishes its
+// proof and does not degrade the aggregate.
+func TestRequiredCheckWithCompleteScopeIsProven(t *testing.T) {
+	scope := completeScope(doc("claim:a", "doc-1", "#one"))
+	scope.Required = map[Check]bool{
+		CheckClaimIDUniqueness:           true,
+		CheckSupersessionTargetExistence: true,
+		CheckSupersessionCurrentness:     true,
+	}
+
+	got := Validate(scope)
+	if got.Status != StatusValid {
+		t.Fatalf("status = %q, want %q (issues: %+v)", got.Status, StatusValid, got.Issues)
+	}
+	for _, c := range []Check{CheckClaimIDUniqueness, CheckSupersessionTargetExistence, CheckSupersessionCurrentness} {
+		if !got.IsProven(c) {
+			t.Errorf("check %q should be proven", c)
+		}
+	}
+}
+
+// A proven defect is never hidden behind an unresolved required check.
+func TestProvenDefectOutranksUnresolvedRequiredCheck(t *testing.T) {
+	scope := ValidationScope{
+		Observed: []Claim{
+			doc("claim:a", "doc-1", "#one"),
+			doc("claim:a", "doc-2", "#two"),
+		},
+		Required: map[Check]bool{CheckSupersessionCurrentness: true},
+	}
+
+	got := Validate(scope)
+	if got.Status != StatusInvalid {
+		t.Fatalf("status = %q, want %q", got.Status, StatusInvalid)
+	}
+	if !got.HasCode(IssueDuplicateClaimID) {
+		t.Error("duplicate defect must still be reported")
+	}
+	if !got.HasCode(IssueRequiredCheckIncomplete) {
+		t.Error("issue-level unresolved information must be preserved")
 	}
 }

@@ -61,6 +61,12 @@ const (
 	// that was not declared complete for that check. Absence proves nothing
 	// here, so the outcome is UNRESOLVED rather than INVALID.
 	IssueIncompleteScope IssueCode = "INCOMPLETE_SCOPE"
+
+	// IssueRequiredCheckIncomplete marks a check the requesting operation
+	// depends on whose scope completeness was not declared COMPLETE. The
+	// operation cannot establish the proof it asked for, so the aggregate is
+	// UNRESOLVED rather than a falsely clean VALID.
+	IssueRequiredCheckIncomplete IssueCode = "REQUIRED_CHECK_INCOMPLETE"
 )
 
 // Issue is a single machine-readable validation finding.
@@ -73,6 +79,10 @@ type Issue struct {
 
 	ClaimID    ClaimID
 	DocumentID DocumentID
+
+	// Check names the completeness-sensitive invariant this issue came from,
+	// when one applies.
+	Check Check
 
 	// Related carries the other identities involved, such as the other Claim
 	// sharing an ID or locator, the missing target, or the cycle members.
@@ -89,11 +99,22 @@ type Result struct {
 	// Issues are ordered deterministically by code, then Claim, then document.
 	Issues []Issue
 
-	// GlobalUniquenessEstablished is true only when the scope was declared
-	// complete for CheckClaimIDUniqueness and no duplicate was observed.
-	// A partial snapshot is never proof of workspace-global uniqueness, so a
-	// clean result over an incomplete scope leaves this false.
+	// Proven records, per check, whether this validation established the
+	// check's proof. A check whose scope completeness was not declared
+	// COMPLETE can never be proven, whether or not the operation required it.
+	Proven map[Check]bool
+
+	// GlobalUniquenessEstablished is Proven[CheckClaimIDUniqueness]: true only
+	// when the scope was declared complete for CheckClaimIDUniqueness and no
+	// duplicate was observed. A partial snapshot is never proof of
+	// workspace-global uniqueness, so a clean result over an incomplete scope
+	// leaves this false.
 	GlobalUniquenessEstablished bool
+}
+
+// IsProven reports whether this validation established the proof for a check.
+func (r Result) IsProven(c Check) bool {
+	return r.Proven != nil && r.Proven[c]
 }
 
 // IssuesWithCode returns the issues carrying a given code.
@@ -139,6 +160,7 @@ func Validate(scope ValidationScope) Result {
 	issues = append(issues, duplicateIDIssues(byID)...)
 	issues = append(issues, locatorIssues(scope.Observed)...)
 	issues = append(issues, supersessionIssues(scope, byID)...)
+	issues = append(issues, requiredCheckIssues(scope)...)
 
 	sortIssues(issues)
 
@@ -153,12 +175,53 @@ func Validate(scope ValidationScope) Result {
 		}
 	}
 
+	result.Proven = provenChecks(scope, issues)
 	// Uniqueness over an incomplete observation is not workspace-global proof.
-	result.GlobalUniquenessEstablished = scope.IsCompleteFor(CheckClaimIDUniqueness) &&
-		!hasCode(issues, IssueDuplicateClaimID) &&
-		!hasCode(issues, IssueEmptyClaimID)
+	result.GlobalUniquenessEstablished = result.Proven[CheckClaimIDUniqueness]
 
 	return result
+}
+
+// provenChecks records which completeness-sensitive proofs this validation
+// actually established. A check is proven only when the scope was declared
+// complete for it and nothing observed contradicts it.
+func provenChecks(scope ValidationScope, issues []Issue) map[Check]bool {
+	return map[Check]bool{
+		CheckClaimIDUniqueness: scope.IsCompleteFor(CheckClaimIDUniqueness) &&
+			!hasCode(issues, IssueDuplicateClaimID) &&
+			!hasCode(issues, IssueEmptyClaimID),
+
+		CheckSupersessionTargetExistence: scope.IsCompleteFor(CheckSupersessionTargetExistence) &&
+			!hasCode(issues, IssueMissingSupersessionTarget) &&
+			!hasCode(issues, IssueIncompleteScope) &&
+			!hasCode(issues, IssueEmptySupersessionTarget),
+
+		// Currentness is a declaration about what was observed, not something
+		// the observed material can demonstrate by itself: only the observing
+		// layer knows whether it saw every possible superseder.
+		CheckSupersessionCurrentness: scope.IsCompleteFor(CheckSupersessionCurrentness) &&
+			!hasCode(issues, IssueDuplicateClaimID) &&
+			!hasCode(issues, IssueSupersessionCycle),
+	}
+}
+
+// requiredCheckIssues reports the checks this operation depends on that cannot
+// establish their proof from the declared scope completeness.
+func requiredCheckIssues(scope ValidationScope) []Issue {
+	var issues []Issue
+	for _, c := range scope.RequiredChecks() {
+		if scope.IsCompleteFor(c) {
+			continue
+		}
+		issues = append(issues, Issue{
+			Code:     IssueRequiredCheckIncomplete,
+			Severity: StatusUnresolved,
+			Check:    c,
+			Detail: fmt.Sprintf("check %s is required by this operation but scope completeness is %q",
+				c, scope.CompletenessFor(c)),
+		})
+	}
+	return issues
 }
 
 // duplicateIDIssues reports IDs observed more than once inside the supplied
@@ -177,6 +240,7 @@ func duplicateIDIssues(byID map[ClaimID][]Claim) []Issue {
 		issues = append(issues, Issue{
 			Code:       IssueDuplicateClaimID,
 			Severity:   StatusInvalid,
+			Check:      CheckClaimIDUniqueness,
 			ClaimID:    id,
 			DocumentID: claims[0].DocumentID,
 			Detail: fmt.Sprintf("Claim ID observed %d times in supplied scope (documents: %v)",
@@ -280,6 +344,7 @@ func supersessionIssues(scope ValidationScope, byID map[ClaimID][]Claim) []Issue
 					issues = append(issues, Issue{
 						Code:       IssueMissingSupersessionTarget,
 						Severity:   StatusInvalid,
+						Check:      CheckSupersessionTargetExistence,
 						ClaimID:    id,
 						DocumentID: c.DocumentID,
 						Related:    []ClaimID{target},
@@ -291,6 +356,7 @@ func supersessionIssues(scope ValidationScope, byID map[ClaimID][]Claim) []Issue
 				issues = append(issues, Issue{
 					Code:       IssueIncompleteScope,
 					Severity:   StatusUnresolved,
+					Check:      CheckSupersessionTargetExistence,
 					ClaimID:    id,
 					DocumentID: c.DocumentID,
 					Related:    []ClaimID{target},
@@ -400,10 +466,17 @@ func sortIssues(issues []Issue) {
 		if a.DocumentID != b.DocumentID {
 			return a.DocumentID < b.DocumentID
 		}
+		if a.Check != b.Check {
+			return a.Check < b.Check
+		}
 		return fmt.Sprint(a.Related) < fmt.Sprint(b.Related)
 	})
 }
 
 func sortIDs(ids []ClaimID) {
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+}
+
+func sortChecks(checks []Check) {
+	sort.Slice(checks, func(i, j int) bool { return checks[i] < checks[j] })
 }

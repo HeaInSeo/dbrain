@@ -80,6 +80,17 @@ The default implementation SHOULD use an opaque globally unique identifier with 
 
 Human-readable labels/titles MAY exist separately from the immutable Claim ID.
 
+### Containing document identity
+
+A Document identity (`DocumentID`) identifies exactly one containing canonical source and is unambiguous within the Development Workspace.
+
+```text
+within a Development Workspace
+DocumentID → exactly one containing canonical source
+```
+
+Two distinct canonical documents, including documents in different repositories, MUST NOT collapse onto the same bare Document identity. The representation is an implementation/profile decision — repository-qualified identity, workspace-global opaque identity, or equivalent — so long as that property holds. Anything keyed on Document identity, including containing-source eligibility resolution, depends on it: a bare filename shared by two repositories would answer for the wrong source.
+
 ## 5. Claim anchor and semantic extent
 
 A Claim MUST resolve to a deterministic bounded semantic span in its canonical source.
@@ -146,6 +157,16 @@ A consumer-specific policy may impose stricter handling, but it MUST NOT weaken 
 
 This prevents supersession from silently changing the meaning of accepted downstream artifacts.
 
+### Resolution provenance
+
+`HISTORICAL_EXACT` resolution is not a current-authority surface, so it remains valid even when the containing source is ineligible for current use. To keep
+
+```text
+historically addressable != currently authoritative
+```
+
+visible to the consumer, a resolution result MUST expose the containing source's eligibility as explicit provenance rather than only as a failure reason. Ineligibility does not have to degrade an exact historical binding into a resolution failure; it must, however, always be legible in the result.
+
 ## 7. Meaning-preserving edit vs semantic change
 
 The framework does not infer semantic equivalence from text similarity.
@@ -188,6 +209,20 @@ Supersession is directional and explicit.
 The new Claim records which prior Claim(s) it supersedes.
 
 Inverse `superseded_by` views SHOULD be derived rather than hand-maintained.
+
+Replacement candidates offered after supersession are **direct observed superseders only**:
+
+```text
+A → B → C
+
+replacement candidates for A = [B]
+```
+
+The chain is not walked to nominate a canonical replacement; any further resolution is a separate explicit step. In every case:
+
+```text
+candidate replacement != accepted rebind
+```
 
 A superseded Claim:
 
@@ -310,7 +345,83 @@ The resolver returns `UNRESOLVED` rather than guessing when:
 - the requested current Claim is superseded and no accepted replacement binding exists for the consumer;
 - source revision/provenance required by policy cannot be established;
 - the supplied validation/observation scope is insufficient to establish a required cross-repository invariant;
-- containing-source current-authority eligibility cannot be established.
+- containing-source current-authority eligibility cannot be established;
+- supersession currentness completeness for the relevant subject/scope cannot be established.
+
+### Supersession currentness completeness
+
+Target existence and currentness are different proofs, in opposite directions:
+
+```text
+SUPERSESSION_TARGET_EXISTENCE
+observed B declares it supersedes A
+→ was A observed?
+
+SUPERSESSION_CURRENTNESS
+observed A
+→ was every Claim that could supersede A observed?
+```
+
+Because
+
+```text
+no superseder observed != no superseder exists
+```
+
+a superseding Claim may live in material this observation never saw. A Claim therefore MUST NOT be reported as current on the strength of an observation that never declared currentness completeness:
+
+```text
+currentness COMPLETE
++ source eligible for current authoritative use
++ no observed superseder
+→ current
+
+currentness INCOMPLETE or UNKNOWN
+→ UNRESOLVED
+```
+
+The same rule governs default current-set retrieval, where two outcomes MUST remain distinguishable:
+
+```text
+resolved, and the current set is empty
+!=
+the current set cannot be determined
+```
+
+An incomplete observation returns UNRESOLVED, never an empty success.
+
+### Required checks
+
+A validation request declares which checks the requesting operation depends on.
+
+```text
+required check + completeness COMPLETE
+→ the check may establish its proof
+
+required check + completeness INCOMPLETE / UNKNOWN
+→ validation aggregate UNRESOLVED
+
+non-required check + incomplete
+→ the request is not failed for that reason alone
+→ but the check's proof bit remains false
+```
+
+Plain document-structure validation requires no workspace-global check, so a document with zero Claims remains VALID. A request that declares workspace-global Claim ID uniqueness as required is UNRESOLVED until completeness for that check is declared.
+
+### Duplicate identity is ambiguous, not arbitrary
+
+When one Claim ID is observed more than once, resolution MUST NOT return one arbitrary observation, and derived relations MUST NOT be synthesised as a union across the duplicate observations and presented as one authoritative relation. Both direct lookup and derived supersession views MUST signal the ambiguity explicitly.
+
+### Admission boundary
+
+Proven-invalid structure is not an admissible input to current authoritative resolution:
+
+```text
+proven structurally invalid scope
+→ MUST NOT produce a current authoritative binding
+```
+
+Historical or diagnostic inspection of such material MAY remain available, but it MUST NOT act as a current-authority surface.
 
 ## 13. Minimum schema candidate
 
@@ -367,7 +478,11 @@ The eventual validator must cover at least:
 13. superseded Claim is excluded from default current retrieval;
 14. Claim in non-authoritative source cannot become project authority;
 15. unresolved authority or source eligibility for a required Claim fails closed;
-16. split/merge preserve old Claims for history without automatic inbound rewrite.
+16. split/merge preserve old Claims for history without automatic inbound rewrite;
+17. a Claim is not reported as current from an observation that never declared supersession-currentness completeness;
+18. an undeterminable current set is distinguishable from a resolved empty current set;
+19. a proven-invalid structure cannot produce a current authoritative binding;
+20. a duplicated Claim ID signals ambiguity in lookup and in derived supersession views.
 
 ## 16. Open serialization detail
 

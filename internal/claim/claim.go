@@ -28,6 +28,15 @@ package claim
 type ClaimID string
 
 // DocumentID identifies the containing human-readable canonical source.
+//
+// A DocumentID is unambiguous within a Development Workspace: it identifies
+// exactly one containing source, so two distinct canonical documents in
+// different repositories never collapse onto the same DocumentID. How that is
+// achieved — repository-qualified paths, workspace-global opaque identity, or
+// anything else with the property — is left to the profile that mints them.
+// Callers that key anything on DocumentID, such as an EligibilityFunc, depend
+// on this: a bare filename shared by two repositories would silently answer for
+// the wrong source.
 type DocumentID string
 
 // Locator is the declared, serialization-independent address of the Claim's

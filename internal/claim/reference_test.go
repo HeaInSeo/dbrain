@@ -78,7 +78,7 @@ func TestResolveReference(t *testing.T) {
 		},
 	}
 
-	r := NewResolver(scope, eligibleEverywhere)
+	r, _ := Admit(scope, eligibleEverywhere)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := r.Resolve(tt.ref)
@@ -102,7 +102,7 @@ func TestResolveReference(t *testing.T) {
 // T18: supersession never silently returns the replacement as an accepted
 // binding, not even when the replacement candidate is unique.
 func TestSupersessionNeverSilentlyRebinds(t *testing.T) {
-	r := NewResolver(currentAndSuperseded(), eligibleEverywhere)
+	r, _ := Admit(currentAndSuperseded(), eligibleEverywhere)
 
 	got := r.Resolve(ClaimReference{ClaimID: "claim:a", Intent: IntentCurrentUse})
 	if got.Status != StatusStaleReviewRequired {
@@ -126,7 +126,7 @@ func TestSplitSupersessionOffersCandidatesWithoutBinding(t *testing.T) {
 		doc("claim:b", "doc-1", "#two", "claim:a"),
 		doc("claim:c", "doc-1", "#three", "claim:a"),
 	)
-	r := NewResolver(scope, eligibleEverywhere)
+	r, _ := Admit(scope, eligibleEverywhere)
 
 	got := r.Resolve(ClaimReference{ClaimID: "claim:a", Intent: IntentCurrentUse})
 	if got.Status != StatusStaleReviewRequired {
@@ -147,7 +147,7 @@ func TestSourceEligibilityGate(t *testing.T) {
 		doc("claim:ineligible", "doc-bad", "#two"),
 		doc("claim:unknown", "doc-unknown", "#three"),
 	)
-	r := NewResolver(scope, eligibility(map[DocumentID]SourceEligibility{
+	r, _ := Admit(scope, eligibility(map[DocumentID]SourceEligibility{
 		"doc-ok":  Eligible,
 		"doc-bad": Ineligible,
 	}))
@@ -205,7 +205,7 @@ func TestSourceEligibilityGate(t *testing.T) {
 // A nil eligibility func means nothing was established, so current use fails
 // closed rather than assuming eligibility.
 func TestMissingEligibilityResolverFailsClosed(t *testing.T) {
-	r := NewResolver(currentAndSuperseded(), nil)
+	r, _ := Admit(currentAndSuperseded(), nil)
 
 	got := r.Resolve(ClaimReference{ClaimID: "claim:c", Intent: IntentCurrentUse})
 	if got.Status != StatusResolutionUnresolved || got.Reason != ReasonSourceEligibilityUnknown {
@@ -223,7 +223,7 @@ func TestAmbiguousClaimIDIsUnresolved(t *testing.T) {
 		doc("claim:a", "doc-1", "#one"),
 		doc("claim:a", "doc-2", "#two"),
 	)
-	r := NewResolver(scope, eligibleEverywhere)
+	r, _ := Admit(scope, eligibleEverywhere)
 
 	for _, intent := range []ReferenceIntent{IntentCurrentUse, IntentHistoricalExact} {
 		got := r.Resolve(ClaimReference{ClaimID: "claim:a", Intent: intent})
@@ -234,22 +234,35 @@ func TestAmbiguousClaimIDIsUnresolved(t *testing.T) {
 	}
 }
 
-// Default current retrieval excludes superseded Claims and anything whose
-// source eligibility is not established.
-func TestCurrentClaimIDsExcludesSupersededAndIneligible(t *testing.T) {
+// Default current retrieval excludes superseded Claims and sources proven
+// ineligible, once the observation is declared complete for currentness.
+func TestCurrentClaimsExcludesSupersededAndIneligible(t *testing.T) {
 	scope := completeScope(
 		doc("claim:a", "doc-1", "#one"),
 		doc("claim:b", "doc-1", "#two", "claim:a"),
 		doc("claim:c", "doc-bad", "#three"),
-		doc("claim:d", "doc-unknown", "#four"),
 	)
-	r := NewResolver(scope, eligibility(map[DocumentID]SourceEligibility{
+	r, _ := Admit(scope, eligibility(map[DocumentID]SourceEligibility{
 		"doc-1":   Eligible,
 		"doc-bad": Ineligible,
 	}))
 
-	got := r.CurrentClaimIDs()
-	if len(got) != 1 || got[0] != "claim:b" {
-		t.Fatalf("CurrentClaimIDs() = %v, want [claim:b]", got)
+	got := r.CurrentClaims()
+	if !got.Resolved() {
+		t.Fatalf("CurrentClaims() = %q/%q, want resolved (%s)", got.Status, got.Reason, got.Detail)
+	}
+	if len(got.ClaimIDs) != 1 || got.ClaimIDs[0] != "claim:b" {
+		t.Fatalf("CurrentClaims() = %v, want [claim:b]", got.ClaimIDs)
+	}
+}
+
+// Unknown source eligibility among the candidates is not a silent exclusion.
+func TestCurrentClaimsUnknownEligibilityIsUnresolved(t *testing.T) {
+	scope := completeScope(doc("claim:a", "doc-unknown", "#one"))
+	r, _ := Admit(scope, eligibility(map[DocumentID]SourceEligibility{}))
+
+	got := r.CurrentClaims()
+	if got.Resolved() || got.Reason != ReasonSourceEligibilityUnknown {
+		t.Fatalf("CurrentClaims() = %q/%q, want unresolved/%q", got.Status, got.Reason, ReasonSourceEligibilityUnknown)
 	}
 }

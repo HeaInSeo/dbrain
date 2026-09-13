@@ -11,9 +11,27 @@ const (
 	CheckClaimIDUniqueness Check = "CLAIM_ID_UNIQUENESS"
 
 	// CheckSupersessionTargetExistence covers "every declared supersession
-	// target exists". An absent target is a defect only when the scope is
-	// declared complete for this check; otherwise it is UNRESOLVED.
+	// target exists":
+	//
+	//	observed B declares it supersedes A
+	//	→ was A observed?
+	//
+	// An absent target is a defect only when the scope is declared complete for
+	// this check; otherwise it is UNRESOLVED.
 	CheckSupersessionTargetExistence Check = "SUPERSESSION_TARGET_EXISTENCE"
+
+	// CheckSupersessionCurrentness covers the opposite direction:
+	//
+	//	observed A
+	//	→ was every Claim that could supersede A observed?
+	//
+	// It is the proof required before any Claim may be called current, because
+	//
+	//	no superseder observed != no superseder exists
+	//
+	// A superseding Claim may live in a repository this observation never saw.
+	// Without this proof, current authoritative resolution fails closed.
+	CheckSupersessionCurrentness Check = "SUPERSESSION_CURRENTNESS"
 )
 
 // Completeness declares how much the supplied observation proves for one check.
@@ -34,7 +52,8 @@ const (
 )
 
 // ValidationScope is the explicit material a validation or resolution request
-// observed, plus the per-check completeness declared for it.
+// observed, the per-check completeness declared for it, and the checks the
+// requesting operation actually requires.
 //
 // A validator never assumes it is looking at the whole Development Workspace.
 // Cross-repository discovery is out of scope for this package: the scope is an
@@ -47,6 +66,13 @@ type ValidationScope struct {
 	// Complete declares completeness per check. A missing or empty entry means
 	// CompletenessUnknown, so the zero-value scope fails closed.
 	Complete map[Check]Completeness
+
+	// Required declares which checks the requesting operation depends on. A
+	// required check that cannot establish its proof makes the validation
+	// aggregate UNRESOLVED; a check nobody required leaves its proof bit false
+	// without failing the request. Structural validation of a document requires
+	// nothing, so a zero-value scope with no defects stays VALID.
+	Required map[Check]bool
 
 	// Subject and Scope record the authority boundary the observation was taken
 	// against, for provenance. They are informational here: this package does
@@ -74,4 +100,21 @@ func (s ValidationScope) CompletenessFor(c Check) Completeness {
 // IsCompleteFor reports whether the scope was declared complete for one check.
 func (s ValidationScope) IsCompleteFor(c Check) bool {
 	return s.CompletenessFor(c) == CompletenessComplete
+}
+
+// IsRequired reports whether the requesting operation depends on one check.
+func (s ValidationScope) IsRequired(c Check) bool {
+	return s.Required != nil && s.Required[c]
+}
+
+// RequiredChecks returns the required checks, sorted, for deterministic output.
+func (s ValidationScope) RequiredChecks() []Check {
+	var out []Check
+	for c, required := range s.Required {
+		if required {
+			out = append(out, c)
+		}
+	}
+	sortChecks(out)
+	return out
 }

@@ -44,7 +44,7 @@ func TestLocationChangeDoesNotCreateNewClaimID(t *testing.T) {
 
 	// The move produces no second identity: references keep resolving to the
 	// one Claim, in its new location.
-	r := NewResolver(completeScope(after), eligibleEverywhere)
+	r, _ := Admit(completeScope(after), eligibleEverywhere)
 	got := r.Resolve(ClaimReference{ClaimID: "claim:a", Intent: IntentCurrentUse})
 	if got.Status != StatusResolvedCurrent {
 		t.Fatalf("status = %q, want %q", got.Status, StatusResolvedCurrent)
