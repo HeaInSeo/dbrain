@@ -423,6 +423,16 @@ proven structurally invalid scope
 
 Historical or diagnostic inspection of such material MAY remain available, but it MUST NOT act as a current-authority surface.
 
+An UNRESOLVED validation MAY likewise remain admitted for historical or diagnostic access: an undeterminable check is not a proven defect. Current-authoritative resolution, however, MUST NOT succeed while any check the requesting operation declared as required remains unproven:
+
+```text
+Required[c] = true
++ Proven[c] != true
+→ current-authority result = UNRESOLVED
+```
+
+This applies to current-use reference resolution and to default current-set retrieval. It does not apply to exact historical identity resolution, which is an addressability surface rather than a current-authority one. The result MUST identify which required check blocked the operation.
+
 ## 13. Minimum schema candidate
 
 Conceptual hand-owned metadata for a Claim is intentionally small:

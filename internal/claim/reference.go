@@ -95,6 +95,11 @@ const (
 	// cannot be ruled out.
 	ReasonCurrentnessIncomplete ResolutionReason = "SUPERSESSION_CURRENTNESS_INCOMPLETE"
 
+	// ReasonRequiredCheckUnproven means the requesting operation declared a
+	// check as required and this validation could not establish its proof, so a
+	// current-authoritative answer would bypass the caller's own declaration.
+	ReasonRequiredCheckUnproven ResolutionReason = "REQUIRED_CHECK_UNPROVEN"
+
 	// ReasonScopeStructurallyInvalid means validation proved a defect in the
 	// observed structure, so the scope is not admissible as an input to current
 	// authoritative resolution.
@@ -115,6 +120,11 @@ type Resolution struct {
 	// Claim is the exact observed Claim the reference addresses, when it was
 	// observed. It is never a replacement Claim.
 	Claim *Claim
+
+	// Check names the completeness-sensitive check that determined this
+	// outcome, when one applies: the unproven required check, or the
+	// currentness proof that was missing.
+	Check Check
 
 	// SourceEligibility is the containing source's eligibility for current
 	// authoritative use, as provenance. It is reported even when the status is
@@ -168,6 +178,9 @@ type CurrentSet struct {
 	// Status is StatusResolvedCurrent or StatusResolutionUnresolved.
 	Status ResolutionStatus
 	Reason ResolutionReason
+
+	// Check names the check that blocked the answer, when one did.
+	Check Check
 
 	// ClaimIDs is meaningful only when Status is StatusResolvedCurrent.
 	ClaimIDs []ClaimID
@@ -264,7 +277,28 @@ func Admit(scope ValidationScope, eligibility EligibilityFunc) (*Resolver, Resul
 
 // Admitted reports whether the observed structure was admissible as an input to
 // current authoritative resolution.
+//
+// Admission covers structure only. A scope may be admitted while the validation
+// aggregate is UNRESOLVED, so that historical and diagnostic access survives an
+// undeterminable check; current-authority surfaces additionally enforce the
+// caller's own required proofs through unprovenRequiredCheck.
 func (r *Resolver) Admitted() bool { return r.admitted }
+
+// unprovenRequiredCheck returns the first check the requesting operation
+// declared as required whose proof this validation did not establish.
+//
+// It derives the answer from the scope's declared requirements and the
+// validation's proof bits rather than recomputing any check's meaning. Current
+// authoritative use must never succeed while such a check exists: that would
+// bypass the caller's own declaration of what had to be proven.
+func (r *Resolver) unprovenRequiredCheck() (Check, bool) {
+	for _, c := range r.scope.RequiredChecks() {
+		if !r.validation.IsProven(c) {
+			return c, true
+		}
+	}
+	return "", false
+}
 
 // Validation returns the validation result the Resolver was admitted on.
 func (r *Resolver) Validation() Result { return r.validation }
@@ -318,10 +352,20 @@ func (r *Resolver) CurrentClaims() CurrentSet {
 			Detail: "observed structure is proven invalid, so no current set can be established",
 		}
 	}
+	if c, unproven := r.unprovenRequiredCheck(); unproven {
+		return CurrentSet{
+			Status: StatusResolutionUnresolved,
+			Reason: ReasonRequiredCheckUnproven,
+			Check:  c,
+			Detail: fmt.Sprintf("check %s is required by this operation but was not proven (completeness %q)",
+				c, r.scope.CompletenessFor(c)),
+		}
+	}
 	if !r.scope.IsCompleteFor(CheckSupersessionCurrentness) {
 		return CurrentSet{
 			Status: StatusResolutionUnresolved,
 			Reason: ReasonCurrentnessIncomplete,
+			Check:  CheckSupersessionCurrentness,
 			Detail: fmt.Sprintf("scope completeness for %s is %q, so unobserved superseders cannot be ruled out",
 				CheckSupersessionCurrentness, r.scope.CompletenessFor(CheckSupersessionCurrentness)),
 		}
@@ -393,6 +437,12 @@ func (r *Resolver) Resolve(ref ClaimReference) Resolution {
 			return unresolved(res, ReasonScopeStructurallyInvalid,
 				"observed structure is proven invalid, so it cannot produce a current authoritative binding")
 		}
+		if c, unproven := r.unprovenRequiredCheck(); unproven {
+			res.Check = c
+			return unresolved(res, ReasonRequiredCheckUnproven,
+				fmt.Sprintf("check %s is required by this operation but was not proven (completeness %q)",
+					c, r.scope.CompletenessFor(c)))
+		}
 		switch res.SourceEligibility {
 		case Ineligible:
 			res.Status = StatusNotCurrentAuthoritative
@@ -418,6 +468,7 @@ func (r *Resolver) Resolve(ref ClaimReference) Resolution {
 		// No superseder was observed, which is not the same as none existing.
 		// Only a scope declared complete for currentness can rule that out.
 		if !r.scope.IsCompleteFor(CheckSupersessionCurrentness) {
+			res.Check = CheckSupersessionCurrentness
 			return unresolved(res, ReasonCurrentnessIncomplete,
 				fmt.Sprintf("no superseder of %q was observed, but scope completeness for %s is %q",
 					ref.ClaimID, CheckSupersessionCurrentness,
