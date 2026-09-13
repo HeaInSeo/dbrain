@@ -1,7 +1,7 @@
-# Claim Model Contract — Working Candidate
+# Claim Model Contract — Canonical
 
-**Status:** WORKING · NON-NORMATIVE  
-**PKG-M0 target:** freeze Claim identity, minting, reference, edit, and supersession semantics before implementation.
+**Status:** CLOSED · CANONICAL  
+**PKG-M0 closure:** Claim identity, minting, reference, edit, supersession, validation, and current-resolution semantics are accepted together with the Claim Core vertical slice.
 
 ## 1. Purpose
 
